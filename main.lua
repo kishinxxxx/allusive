@@ -59,6 +59,7 @@ local cfg = {
     random_accuracy_max = 70,
     curve_mode = "camera",
     random_target = false,
+    target_closest = false,
     toggle_key = "RightControl",
     hide_minimized = false,
     bg_transparency = 0.04,
@@ -1050,6 +1051,35 @@ local function selectTargetByMouse()
     return closestPlayer
 end
 
+local function selectClosestPlayer()
+    local livingPlayers = {}
+    local alive = WS:FindFirstChild("Alive")
+    if alive then
+        for _, char in alive:GetChildren() do
+            if char.Name ~= lp.Name and char.PrimaryPart then
+                table.insert(livingPlayers, char)
+            end
+        end
+    end
+
+    local hrp = getRoot()
+    if not hrp then return nil end
+
+    local closestPlayer = nil
+    local closestDistance = math.huge
+
+    for _, char in livingPlayers do
+        local dist = (char.PrimaryPart.Position - hrp.Position).Magnitude
+        if dist < closestDistance then
+            closestDistance = dist
+            closestPlayer = char
+        end
+    end
+
+    currentTarget = closestPlayer
+    return closestPlayer
+end
+
 local function pickRandomTarget()
     local alive = WS:FindFirstChild("Alive")
     if not alive then return end
@@ -1129,7 +1159,7 @@ local function getScreenPositions()
 end
 
 local function getMouseLoc()
-    if cfg.random_target and currentTarget and currentTarget.PrimaryPart then
+    if (cfg.random_target or cfg.target_closest) and currentTarget and currentTarget.PrimaryPart then
         local viewportPt = WS.CurrentCamera:WorldToViewportPoint(currentTarget.PrimaryPart.Position)
         return { viewportPt.X, viewportPt.Y }
     end
@@ -1151,7 +1181,9 @@ local function executeParry()
     parryCount += 1
     task.delay(0.5, function() if parryCount > 0 then parryCount -= 1 end end)
 
-    if not cfg.random_target then
+    if cfg.target_closest then
+        selectClosestPlayer()
+    elseif not cfg.random_target then
         selectTargetByMouse()
     end
 
@@ -1428,6 +1460,11 @@ local function startOrbit()
     orbitAngle = 0
     orbitConn = hb:Connect(function(dt)
         if not cfg.orbit then return end
+        local char = lp.Character
+        if not char then return end
+        local alive = WS:FindFirstChild("Alive")
+        if not alive or char.Parent ~= alive then return end
+
         local ball
         if balls then
             for _, b in balls:GetChildren() do
@@ -1640,6 +1677,10 @@ apMod:AddDropdown({ title = "Curve Mode", options = {"Camera", "Dot", "Backwards
     cfg.curve_mode = v:lower()
 end })
 apMod:AddCheckbox({ title = "Random Target", flag = "random_target", callback = function(v) cfg.random_target = v end })
+apMod:AddCheckbox({ title = "Target Closest", flag = "target_closest", callback = function(v)
+    cfg.target_closest = v
+    saveCfg()
+end })
 
 local orbitMod = farmTab:AddModule({
     title = "Ball Orbit", desc = "orbit character around the ball",
