@@ -54,6 +54,9 @@ local cfg = {
     ability_module = false,
     ability_round = false,
     ability_continuous = false,
+    simple_tp = false,
+    simple_tp_continuous = false,
+    simple_tp_round = false,
     randomize_accuracy = false,
     random_accuracy_min = 30,
     random_accuracy_max = 70,
@@ -1531,6 +1534,86 @@ local function stopContinuous()
     cfg.ability_continuous = false
 end
 
+local simpleTpRoundConn = nil
+local continuousTpConn = nil
+
+local function doSimpleTp()
+    local char = lp.Character
+    if not char then return false end
+    local alive = WS:FindFirstChild("Alive")
+    if not alive or char.Parent ~= alive then return false end
+
+    local ball = nil
+    if balls then
+        for _, b in balls:GetChildren() do
+            if b:GetAttribute("realBall") then ball = b; break end
+        end
+    end
+    if not ball then return false end
+    local hrp = getRoot()
+    if not hrp then return false end
+
+    hrp.CFrame = CFrame.new(ball.Position)
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    return true
+end
+
+local function startContinuousTp()
+    if continuousTpConn then return end
+    continuousTpConn = hb:Connect(function()
+        if not cfg.simple_tp or not cfg.simple_tp_continuous then return end
+        doSimpleTp()
+    end)
+end
+
+local function stopContinuousTp()
+    if continuousTpConn then
+        continuousTpConn:Disconnect()
+        continuousTpConn = nil
+    end
+end
+
+local function startSimpleTpRound()
+    if simpleTpRoundConn then simpleTpRoundConn:Disconnect(); simpleTpRoundConn = nil end
+    if not balls then return end
+    simpleTpRoundConn = balls.ChildAdded:Connect(function()
+        if not cfg.simple_tp or not cfg.simple_tp_round then return end
+        task.spawn(function()
+            for i = 1, 15 do
+                task.wait(0.1)
+                if not cfg.simple_tp or not cfg.simple_tp_round then break end
+                if doSimpleTp() then break end
+            end
+        end)
+    end)
+end
+
+local function stopSimpleTpRound()
+    if simpleTpRoundConn then
+        simpleTpRoundConn:Disconnect()
+        simpleTpRoundConn = nil
+    end
+end
+
+local function onSimpleTp(state)
+    cfg.simple_tp = state
+    if state then
+        if cfg.simple_tp_round then
+            startSimpleTpRound()
+        end
+        if cfg.simple_tp_continuous then
+            startContinuousTp()
+        else
+            if not cfg.simple_tp_round then
+                doSimpleTp()
+            end
+        end
+    else
+        stopContinuousTp()
+        stopSimpleTpRound()
+    end
+end
+
 
 local noRenderConns = {}
 local savedLighting = {}
@@ -1692,7 +1775,10 @@ local orbitMod = farmTab:AddModule({
     end
 })
 
-orbitMod:AddSlider({ title = "Speed", min = 0, max = 200, default = cfg.orbit_speed, callback = function(v) cfg.orbit_speed = v end })
+orbitMod:AddSlider({ title = "Speed", min = 0, max = 1000, default = cfg.orbit_speed, callback = function(v)
+    cfg.orbit_speed = v
+    saveCfg()
+end })
 orbitMod:AddSlider({ title = "Distance", min = 0, max = 50, default = cfg.orbit_dist, callback = function(v) cfg.orbit_dist = v end })
 orbitMod:AddSlider({ title = "Height", min = -20, max = 20, default = cfg.orbit_height, callback = function(v) cfg.orbit_height = v end })
 orbitMod:AddCheckbox({ title = "Stick on Ball", flag = "orbit_stick", callback = function(v) cfg.orbit_stick = v end })
@@ -1711,6 +1797,35 @@ end })
 abilityMod:AddCheckbox({ title = "Continuous Spam", flag = "ability_continuous", callback = function(state)
     cfg.ability_continuous = state
     if state then startContinuous() else stopContinuous() end
+end })
+
+local simpleTpMod = farmTab:AddModule({
+    title = "Simple Teleport", desc = "teleport character to the ball",
+    side = "right", flag = "simple_tp",
+    callback = function(state)
+        onSimpleTp(state)
+        saveCfg()
+    end
+})
+
+simpleTpMod:AddCheckbox({ title = "Continuous TP", flag = "simple_tp_continuous", callback = function(state)
+    cfg.simple_tp_continuous = state
+    if state and cfg.simple_tp then
+        startContinuousTp()
+    else
+        stopContinuousTp()
+    end
+    saveCfg()
+end })
+
+simpleTpMod:AddCheckbox({ title = "Start Round TP", flag = "simple_tp_round", callback = function(state)
+    cfg.simple_tp_round = state
+    if state and cfg.simple_tp then
+        startSimpleTpRound()
+    else
+        stopSimpleTpRound()
+    end
+    saveCfg()
 end })
 
 local miscTab = createTab("Misc", "rbxassetid://7072718362")
@@ -2186,5 +2301,13 @@ if cfg.orbit then startOrbit() end
 if cfg.ability_round then startRoundSpam() end
 if cfg.ability_continuous then startContinuous() end
 if cfg.no_render then startNoRender() end
+if cfg.simple_tp then
+    if cfg.simple_tp_continuous then
+        startContinuousTp()
+    end
+    if cfg.simple_tp_round then
+        startSimpleTpRound()
+    end
+end
 
 notify("nothing", "loaded", 3)
