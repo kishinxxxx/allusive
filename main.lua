@@ -51,6 +51,7 @@ local cfg = {
     orbit_height = 5,
     orbit_stick = false,
     no_render = false,
+    anti_afk = false,
     ability_module = false,
     ability_round = false,
     ability_continuous = false,
@@ -1737,6 +1738,49 @@ local function stopNoRender()
     savedTerrain = {}
 end
 
+local _antiAfkOldConnections = {}
+
+local function setAntiAfk(enabled)
+    for _, conn in ipairs(_antiAfkOldConnections) do
+        pcall(function()
+            if not conn.Enabled then
+                if typeof(conn.Enable) == "function" then
+                    conn:Enable()
+                else
+                    conn.Enabled = true
+                end
+            end
+        end)
+    end
+    table.clear(_antiAfkOldConnections)
+
+    if enabled then
+        pcall(function()
+            local getconn = getconnections or get_connections
+            if getconn then
+                local player = lp or Players.LocalPlayer
+                if not player then
+                    pcall(function() player = Players.PlayerAdded:Wait() end)
+                end
+                if player and player.Idled then
+                    for _, conn in ipairs(getconn(player.Idled)) do
+                        if conn.Enabled then
+                            pcall(function()
+                                if typeof(conn.Disable) == "function" then
+                                    conn:Disable()
+                                else
+                                    conn.Enabled = false
+                                end
+                            end)
+                            table.insert(_antiAfkOldConnections, conn)
+                        end
+                    end
+                end
+            end
+        end)
+    end
+end
+
 
 local farmTab = createTab("Farm", "rbxassetid://18604510750")
 
@@ -1836,6 +1880,16 @@ miscTab:AddModule({
     callback = function(state)
         cfg.no_render = state
         if state then startNoRender() else stopNoRender() end
+        saveCfg()
+    end
+})
+
+miscTab:AddModule({
+    title = "Anti AFK", desc = "prevents 20-minute idle disconnect",
+    side = "right", flag = "anti_afk",
+    callback = function(state)
+        cfg.anti_afk = state
+        setAntiAfk(state)
         saveCfg()
     end
 })
@@ -2301,6 +2355,7 @@ if cfg.orbit then startOrbit() end
 if cfg.ability_round then startRoundSpam() end
 if cfg.ability_continuous then startContinuous() end
 if cfg.no_render then startNoRender() end
+if cfg.anti_afk then setAntiAfk(true) end
 if cfg.simple_tp then
     if cfg.simple_tp_continuous then
         startContinuousTp()
