@@ -52,6 +52,7 @@ local cfg = {
     orbit_stick = false,
     no_render = false,
     anti_afk = false,
+    auto_map_voter = false,
     ability_module = false,
     ability_round = false,
     ability_continuous = false,
@@ -1781,6 +1782,198 @@ local function setAntiAfk(enabled)
     end
 end
 
+local mapVoterRunning = false
+local lastVotedNotification = 0
+local currentVotedPad = nil
+
+local TARGET_MAPS_LIST = {
+    "enchanted desert",
+    "cowboy village",
+    "grassy classic",
+    "kraken island",
+    "ring of fire",
+    "ancient map",
+    "classic v2",
+    "atlantis",
+    "olympus",
+    "classic",
+    "heaven",
+    "jungle",
+    "desert",
+    "forest",
+    "ocean",
+}
+
+local function checkMapText(text)
+    if not text or typeof(text) ~= "string" then return false, nil end
+    local lower = text:lower()
+    local clean = lower:gsub("^%s+", ""):gsub("%s+$", "")
+    for _, mapName in ipairs(TARGET_MAPS_LIST) do
+        if clean == mapName then
+            return true, mapName
+        end
+    end
+    for _, mapName in ipairs(TARGET_MAPS_LIST) do
+        if lower:find(mapName, 1, true) then
+            return true, mapName
+        end
+    end
+    return false, nil
+end
+
+local function getTargetMapPad()
+    local spawnObj = WS:FindFirstChild("Spawn") or WS:FindFirstChild("Lobby")
+    local counter = spawnObj and (spawnObj:FindFirstChild("NewPlayerCounter") or spawnObj:FindFirstChild("MapVoting") or spawnObj:FindFirstChild("Counter"))
+    if not counter then
+        counter = WS:FindFirstChild("NewPlayerCounter", true)
+    end
+
+    local colliders = counter and (counter:FindFirstChild("Colliders") or counter:FindFirstChild("Pads"))
+    local gui = counter and counter:FindFirstChild("GUI")
+    local surfaceGui = gui and gui:FindFirstChild("SurfaceGui")
+    local top = surfaceGui and surfaceGui:FindFirstChild("Top")
+    local options = top and top:FindFirstChild("Options")
+
+    local matchedPads = {}
+
+    -- 1. Check standard SurfaceGui Top.Options against Colliders
+    if options and colliders then
+        local optChildren = options:GetChildren()
+        local colChildren = colliders:GetChildren()
+        for i, opt in ipairs(optChildren) do
+            local foundMap = nil
+            for _, desc in ipairs(opt:GetDescendants()) do
+                if desc:IsA("TextLabel") or desc:IsA("TextButton") then
+                    local isMatch, mapName = checkMapText(desc.Text)
+                    if isMatch then
+                        foundMap = mapName
+                        break
+                    end
+                end
+            end
+            if foundMap then
+                local optIdx = tonumber(opt.Name) or i
+                local pad = colliders:FindFirstChild(opt.Name) 
+                    or colliders:FindFirstChild(tostring(optIdx)) 
+                    or colChildren[optIdx]
+                if pad and pad:IsA("BasePart") then
+                    table.insert(matchedPads, { pad = pad, map = foundMap })
+                end
+            end
+        end
+    end
+
+    -- 2. Check directly on colliders / pads (attributes, child Billboard/SurfaceGuis)
+    if #matchedPads == 0 and colliders then
+        for _, pad in ipairs(colliders:GetChildren()) do
+            if pad:IsA("BasePart") then
+                local foundMap = nil
+                for _, attr in ipairs({"Map", "MapName", "Choice", "Option"}) do
+                    local val = pad:GetAttribute(attr)
+                    local isMatch, mapName = checkMapText(val)
+                    if isMatch then foundMap = mapName; break end
+                end
+                if not foundMap then
+                    for _, desc in ipairs(pad:GetDescendants()) do
+                        if desc:IsA("TextLabel") or desc:IsA("TextButton") then
+                            local isMatch, mapName = checkMapText(desc.Text)
+                            if isMatch then foundMap = mapName; break end
+                        end
+                    end
+                end
+                if foundMap then
+                    table.insert(matchedPads, { pad = pad, map = foundMap })
+                end
+            end
+        end
+    end
+
+    -- 3. Check any workspace voting folders
+    if #matchedPads == 0 then
+        for _, fName in ipairs({"MapVoting", "VotingPads", "Voting", "MapVote", "VotePads", "Pads"}) do
+            local folder = WS:FindFirstChild(fName) or (spawnObj and spawnObj:FindFirstChild(fName))
+            if folder then
+                for _, obj in ipairs(folder:GetChildren()) do
+                    local padPart = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart")
+                    if padPart then
+                        for _, desc in ipairs(obj:GetDescendants()) do
+                            if desc:IsA("TextLabel") or desc:IsA("TextButton") then
+                                local isMatch, mapName = checkMapText(desc.Text)
+                                if isMatch then
+                                    table.insert(matchedPads, { pad = padPart, map = mapName })
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if #matchedPads > 0 then
+        -- Return any of the matching pads (or random if multiple match)
+        local chosen = matchedPads[math.random(1, #matchedPads)]
+        return chosen.pad, chosen.map
+    end
+    return nil, nil
+end
+
+local function stepMapVoter()
+    if not cfg.auto_map_voter then return end
+    
+    local char = lp.Character
+    if not char then return end
+    local hrp = getRoot()
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum or hum.Health <= 0 then return end
+
+    -- Check if in lobby (alive check: if in Alive, do not vote)
+    local alive = WS:FindFirstChild("Alive")
+    if alive and char.Parent == alive then
+        currentVotedPad = nil
+        return
+    end
+
+    local pad, mapName = getTargetMapPad()
+    if pad then
+        currentVotedPad = pad
+        local padPos = pad:IsA("BasePart") and pad.Position or pad:GetPivot().Position
+        local padHeight = pad:IsA("BasePart") and pad.Size.Y or 2
+        local targetCFrame = CFrame.new(padPos + Vector3.new(0, (padHeight / 2) + 3, 0))
+
+        if (hrp.Position - padPos).Magnitude > 4 then
+            hrp.CFrame = targetCFrame
+            hrp.AssemblyLinearVelocity = Vector3.zero
+        end
+        hum:MoveTo(padPos)
+
+        if os.clock() - lastVotedNotification > 10 and mapName then
+            lastVotedNotification = os.clock()
+            notify("Map Voter", "Voting for: " .. mapName:upper(), 3)
+        end
+    else
+        currentVotedPad = nil
+    end
+end
+
+local function startMapVoter()
+    if mapVoterRunning then return end
+    mapVoterRunning = true
+    task.spawn(function()
+        while mapVoterRunning and cfg.auto_map_voter and _G._bbfarm do
+            pcall(stepMapVoter)
+            task.wait(0.25)
+        end
+        mapVoterRunning = false
+    end)
+end
+
+local function stopMapVoter()
+    mapVoterRunning = false
+    currentVotedPad = nil
+end
+
 
 local farmTab = createTab("Farm", "rbxassetid://18604510750")
 
@@ -1826,6 +2019,16 @@ end })
 orbitMod:AddSlider({ title = "Distance", min = 0, max = 50, default = cfg.orbit_dist, callback = function(v) cfg.orbit_dist = v end })
 orbitMod:AddSlider({ title = "Height", min = -20, max = 20, default = cfg.orbit_height, callback = function(v) cfg.orbit_height = v end })
 orbitMod:AddCheckbox({ title = "Stick on Ball", flag = "orbit_stick", callback = function(v) cfg.orbit_stick = v end })
+
+local mapVoterMod = farmTab:AddModule({
+    title = "Auto Map Voter", desc = "auto votes for preferred maps",
+    side = "left", flag = "auto_map_voter",
+    callback = function(state)
+        cfg.auto_map_voter = state
+        if state then startMapVoter() else stopMapVoter() end
+        saveCfg()
+    end
+})
 
 local abilityMod = farmTab:AddModule({
     title = "Auto Ability", desc = "automatically uses ability",
@@ -2356,6 +2559,7 @@ if cfg.ability_round then startRoundSpam() end
 if cfg.ability_continuous then startContinuous() end
 if cfg.no_render then startNoRender() end
 if cfg.anti_afk then setAntiAfk(true) end
+if cfg.auto_map_voter then startMapVoter() end
 if cfg.simple_tp then
     if cfg.simple_tp_continuous then
         startContinuousTp()
